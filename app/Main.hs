@@ -3,11 +3,10 @@
 module Main where
 
 import Agent
-import Tools (calculatorTool, weatherTool)
-
-import Data.Aeson (Value(..))
+import Data.Aeson (Value (..))
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
+import Tools (calculatorTool, weatherTool)
 
 -- | Create our agent (using DataRobot's GPT-5)
 myAgent :: Agent () Text
@@ -58,7 +57,10 @@ main = do
 
       -- Example 3: Complex expression
       putStrLn "Query: If Tokyo is 22°C, what is that in Fahrenheit? Use the calculator."
-      result3 <- runAgentVerbose client myAgent
+      result3 <-
+        runAgentVerbose
+          client
+          myAgent
           "If Tokyo is 22°C, what is that in Fahrenheit? Use the formula F = C * 9/5 + 32. Use the calculator tool."
       case result3 of
         Left err -> putStrLn $ "Error: " ++ show err
