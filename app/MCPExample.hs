@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 -- | MCP (Model Context Protocol) Example
 --
@@ -17,28 +18,29 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
+import System.Environment (lookupEnv)
 
 --------------------------------------------------------------------------------
--- Configuration
+-- Configuration (via environment variables)
 --------------------------------------------------------------------------------
 
--- | Wren MCP server URL
-wrenMCPUrl :: Text
-wrenMCPUrl = "https://app.datarobot.com/api/v2/deployments/693bfc1fedd8925c19620fc7/directAccess/mcp"
+data EnvConfig = EnvConfig
+  { envMcpUrl :: Text
+  , envApiToken :: Text
+  }
 
--- | API token for authentication
-apiToken :: Text
-apiToken = "NjhlZTE0NTIzMzYyNzE2M2FjMGY4NTgxOnhUcG9FRGt1UW55Yy90VGlnaUR1QVVmUXUrdTVqaFBNQWtwWEJiRTQrRnM9"
-
--- | Create the MCP config with authentication headers
-wrenConfig :: HttpMCPConfig
-wrenConfig =
-  defaultHttpMCPConfig
-    { httpMCPHeaders =
-        [ mkHeader "Authorization" ("Bearer " <> TE.encodeUtf8 apiToken),
-          mkHeader "x-datarobot-token" ("Bearer " <> TE.encodeUtf8 apiToken)
-        ]
-    }
+loadEnvConfig :: IO (Either String EnvConfig)
+loadEnvConfig = do
+  maybeUrl <- lookupEnv "MCP_URL"
+  maybeToken <- lookupEnv "MCP_API_TOKEN"
+  case (maybeUrl, maybeToken) of
+    (Just url, Just token) ->
+      pure $ Right EnvConfig
+        { envMcpUrl = T.pack url
+        , envApiToken = T.pack token
+        }
+    (Nothing, _) -> pure $ Left "MCP_URL not set"
+    (_, Nothing) -> pure $ Left "MCP_API_TOKEN not set"
 
 --------------------------------------------------------------------------------
 -- Main
@@ -49,16 +51,27 @@ main = do
   putStrLn "Haskell Agent Framework - MCP Example"
   putStrLn "======================================"
   putStrLn ""
-  putStrLn $ "Connecting to: " ++ T.unpack wrenMCPUrl
-  putStrLn ""
-
-  connectHttpMCP wrenConfig wrenMCPUrl >>= \case
-    Left err -> putStrLn $ "Failed to connect: " ++ show err
-    Right mcpServer ->
-      finally (runMcpFlow mcpServer) $ do
-        disconnectHttpMCP mcpServer
-        putStrLn ""
-        putStrLn "Disconnected from MCP server."
+  loadEnvConfig >>= \case
+    Left err -> do
+      putStrLn $ "Missing configuration: " ++ err
+      putStrLn "Set MCP_URL and MCP_API_TOKEN, then re-run the example."
+    Right EnvConfig{..} -> do
+      putStrLn $ "Connecting to: " ++ T.unpack envMcpUrl
+      putStrLn ""
+      let wrenConfig =
+            defaultHttpMCPConfig
+              { httpMCPHeaders =
+                  [ mkHeader "Authorization" ("Bearer " <> TE.encodeUtf8 envApiToken)
+                  , mkHeader "x-datarobot-token" ("Bearer " <> TE.encodeUtf8 envApiToken)
+                  ]
+              }
+      connectHttpMCP wrenConfig envMcpUrl >>= \case
+        Left err -> putStrLn $ "Failed to connect: " ++ show err
+        Right mcpServer ->
+          finally (runMcpFlow mcpServer) $ do
+            disconnectHttpMCP mcpServer
+            putStrLn ""
+            putStrLn "Disconnected from MCP server."
   where
     systemPrompt =
       "You are a helpful assistant with access to MCP tools. \

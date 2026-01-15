@@ -2,7 +2,29 @@ cabal-version: 2.4
 name:          haskell-agent
 version:       0.1.0.0
 synopsis:      A minimal AI agent framework inspired by pydantic-ai
+description:
+  Typed agent framework with tool-calling, model-agnostic clients, and MCP support.
+  The library focuses on type-driven output parsing via JSON Schema and provides
+  simple helpers for composing tools and chaining agent workflows.
+category:      AI, LLM, Agents
+homepage:      https://github.com/lukas/haskell-agent
+bug-reports:   https://github.com/lukas/haskell-agent/issues
+license:       MIT
+license-file:  LICENSE
+author:        Lukas
+maintainer:    Lukas <lukas@users.noreply.github.com>
 build-type:    Simple
+extra-source-files:
+  README.md
+  CHANGELOG.md
+  docs/*.md
+extra-doc-files:
+  README.md
+  CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/lukas/haskell-agent.git
 
 library
   exposed-modules:

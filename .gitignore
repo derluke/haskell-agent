@@ -1,1 +1,10 @@
 dist-newstyle
+.stack-work
+.cabal-sandbox
+cabal.sandbox.config
+cabal.project.local
+.ghc.environment.*
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
