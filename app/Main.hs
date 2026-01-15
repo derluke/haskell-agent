@@ -14,6 +14,8 @@
 module Main where
 
 import Agent
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -51,28 +53,22 @@ reportAgent = typedAgentWithDeps model
 -- Pipeline
 --------------------------------------------------------------------------------
 
--- | Run the typed pipeline
+-- | Run the typed pipeline using ExceptT for elegant chaining
 runPipeline :: (LLMClient c) => c -> Text -> IO (Either AgentError WeatherReport)
-runPipeline client city = do
-  -- Step 1: Agent () WeatherInfo
-  step1 <- runAgentVerbose client weatherAgent ("Weather in " <> city <> "?")
-  case step1 of
-    Left err -> pure $ Left err
-    Right (weather, _) -> do
-      putStrLn $ "  => " ++ show weather
+runPipeline client city = runExceptT $ do
+  -- Step 1: () -> WeatherInfo
+  (weather, _) <- ExceptT $ runAgentVerbose client weatherAgent ("Weather in " <> city <> "?")
+  liftIO $ putStrLn $ "  => " ++ show weather
 
-      -- Step 2: Agent WeatherInfo ConvertedTemperature
-      let prompt2 = "Convert " <> T.pack (show $ wiTemperatureC weather) <> "C"
-      step2 <- runAgentWithDeps weather client temperatureAgent prompt2
-      case step2 of
-        Left err -> pure $ Left err
-        Right (temps, _) -> do
-          putStrLn $ "  => " ++ show temps
+  -- Step 2: WeatherInfo -> ConvertedTemperature
+  (temps, _) <- ExceptT $ runAgentWithDeps weather client temperatureAgent
+                  ("Convert " <> T.pack (show $ wiTemperatureC weather) <> "C")
+  liftIO $ putStrLn $ "  => " ++ show temps
 
-          -- Step 3: Agent (WeatherInfo, ConvertedTemperature) WeatherReport
-          let prompt3 = "Generate a weather report for " <> wiCity weather
-          step3 <- runAgentWithDeps (weather, temps) client reportAgent prompt3
-          pure $ fmap fst step3
+  -- Step 3: (WeatherInfo, ConvertedTemperature) -> WeatherReport
+  (report, _) <- ExceptT $ runAgentWithDeps (weather, temps) client reportAgent
+                  ("Generate a weather report for " <> wiCity weather)
+  pure report
 
 --------------------------------------------------------------------------------
 -- Main
