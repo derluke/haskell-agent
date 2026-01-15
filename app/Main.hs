@@ -1,69 +1,110 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Typed Agent Chains Demo
+--
+-- This example demonstrates the elegance of Haskell's type system for agents.
+-- The return type determines the output schema - no manual JSON instructions needed.
+--
+-- @
+--   weatherAgent     :: Agent () WeatherInfo
+--   temperatureAgent :: Agent WeatherInfo ConvertedTemperature
+--   reportAgent      :: Agent (WeatherInfo, ConvertedTemperature) WeatherReport
+-- @
 module Main where
 
 import Agent
-import Data.Aeson (Value (..))
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Tools (calculatorTool, weatherTool)
+import Types
 
--- | Create our agent (using DataRobot's GPT-5)
-myAgent :: Agent () Text
-myAgent =
-  agent
-    "azure/gpt-5-2025-08-07"
-    "You are a helpful assistant with access to a calculator and weather information. \
-    \Be concise in your responses."
-    parseText
-    `withTool` calculatorTool
-    `withTool` weatherTool
+--------------------------------------------------------------------------------
+-- Typed Agents
+--
+-- The magic: just declare the return type. The ToSchema instance generates
+-- the JSON schema, and the agent automatically uses a 'final_result' tool
+-- to guarantee type-safe output.
+--------------------------------------------------------------------------------
+
+-- | Step 1: Get weather data
+-- The type signature alone tells the agent what to return!
+weatherAgent :: Agent () WeatherInfo
+weatherAgent = typedAgent model `withTool` weatherTool
   where
-    parseText (String t) = Right t
-    parseText _ = Left "Expected text response"
+    model = "azure/gpt-5-2025-08-07"
+
+-- | Step 2: Convert temperature (depends on WeatherInfo)
+temperatureAgent :: Agent WeatherInfo ConvertedTemperature
+temperatureAgent = typedAgentWithDeps model `withTool` liftTool calculatorTool
+  where
+    model = "azure/gpt-5-2025-08-07"
+
+-- | Step 3: Generate complete report (depends on both previous outputs)
+reportAgent :: Agent (WeatherInfo, ConvertedTemperature) WeatherReport
+reportAgent = typedAgentWithDeps model
+  where
+    model = "azure/gpt-5-2025-08-07"
+
+--------------------------------------------------------------------------------
+-- Pipeline
+--------------------------------------------------------------------------------
+
+-- | Run the typed pipeline
+runPipeline :: (LLMClient c) => c -> Text -> IO (Either AgentError WeatherReport)
+runPipeline client city = do
+  -- Step 1: Agent () WeatherInfo
+  step1 <- runAgentVerbose client weatherAgent ("Weather in " <> city <> "?")
+  case step1 of
+    Left err -> pure $ Left err
+    Right (weather, _) -> do
+      putStrLn $ "  => " ++ show weather
+
+      -- Step 2: Agent WeatherInfo ConvertedTemperature
+      let prompt2 = "Convert " <> T.pack (show $ wiTemperatureC weather) <> "C"
+      step2 <- runAgentWithDeps weather client temperatureAgent prompt2
+      case step2 of
+        Left err -> pure $ Left err
+        Right (temps, _) -> do
+          putStrLn $ "  => " ++ show temps
+
+          -- Step 3: Agent (WeatherInfo, ConvertedTemperature) WeatherReport
+          let prompt3 = "Generate a weather report for " <> wiCity weather
+          step3 <- runAgentWithDeps (weather, temps) client reportAgent prompt3
+          pure $ fmap fst step3
+
+--------------------------------------------------------------------------------
+-- Main
+--------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
-  putStrLn "Haskell Agent Framework Demo"
-  putStrLn "============================="
+  putStrLn "Haskell Agent Framework - Type-Driven Agents"
+  putStrLn "============================================="
+  putStrLn ""
+  putStrLn "The return type IS the specification:"
+  putStrLn "  weatherAgent     :: Agent () WeatherInfo"
+  putStrLn "  temperatureAgent :: Agent WeatherInfo ConvertedTemperature"
+  putStrLn "  reportAgent      :: Agent (WeatherInfo, ConvertedTemperature) WeatherReport"
   putStrLn ""
 
-  -- Get DataRobot client from environment
-  clientResult <- newDataRobotClient
-  case clientResult of
-    Left err -> do
-      TIO.putStrLn $ "Error: " <> err
-      putStrLn "Make sure DATAROBOT_API_TOKEN and DATAROBOT_ENDPOINT are set"
+  newDataRobotClient >>= \case
+    Left err -> TIO.putStrLn $ "Error: " <> err
     Right client -> do
-      -- Example 1: Calculator
-      putStrLn "Query: What is 42 * 17?"
-      result1 <- runAgentVerbose client myAgent "What is 42 * 17?"
-      case result1 of
+      result <- runPipeline client "Tokyo"
+      case result of
         Left err -> putStrLn $ "Error: " ++ show err
-        Right (response, state) -> do
-          TIO.putStrLn $ "\x1b[1mResponse:\x1b[0m " <> response
-          putStrLn $ "Tokens used: " ++ show (asUsage state)
-      putStrLn ""
-
-      -- Example 2: Weather
-      putStrLn "Query: What's the weather in Tokyo?"
-      result2 <- runAgentVerbose client myAgent "What's the weather in Tokyo?"
-      case result2 of
-        Left err -> putStrLn $ "Error: " ++ show err
-        Right (response, state) -> do
-          TIO.putStrLn $ "\x1b[1mResponse:\x1b[0m " <> response
-          putStrLn $ "Tokens used: " ++ show (asUsage state)
-      putStrLn ""
-
-      -- Example 3: Complex expression
-      putStrLn "Query: If Tokyo is 22°C, what is that in Fahrenheit? Use the calculator."
-      result3 <-
-        runAgentVerbose
-          client
-          myAgent
-          "If Tokyo is 22°C, what is that in Fahrenheit? Use the formula F = C * 9/5 + 32. Use the calculator tool."
-      case result3 of
-        Left err -> putStrLn $ "Error: " ++ show err
-        Right (response, state) -> do
-          TIO.putStrLn $ "\x1b[1mResponse:\x1b[0m " <> response
-          putStrLn $ "Tokens used: " ++ show (asUsage state)
+        Right report -> do
+          putStrLn "\n=== WeatherReport ==="
+          TIO.putStrLn $ "City:        " <> wrCity report
+          TIO.putStrLn $ "Condition:   " <> wrCondition report
+          putStrLn $
+            "Temperature: "
+              ++ show (ctCelsius $ wrTemperature report)
+              ++ "C / "
+              ++ show (ctFahrenheit $ wrTemperature report)
+              ++ "F / "
+              ++ show (ctKelvin $ wrTemperature report)
+              ++ "K"
+          TIO.putStrLn $ "Feels like:  " <> wrFeelsLike report

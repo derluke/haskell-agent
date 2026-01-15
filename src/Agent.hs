@@ -1,20 +1,29 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Agent
   ( -- * Re-exports
     module Agent.Types
   , module Agent.Tools
 
-    -- * Agent creation
+    -- * Agent creation (manual output parsing)
   , agent
+  , agentWithDeps
   , withTool
+
+    -- * Agent creation (typed output via result tool)
+  , typedAgent
+  , typedAgentWithDeps
 
     -- * Running agents
   , runAgent
   , runAgentWithDeps
   , runAgentVerbose
+  , runAgentWithCallback
+  , runAgentWithDepsCallback
 
     -- * Events
   , AgentEvent(..)
@@ -30,6 +39,9 @@ module Agent
   , OpenAIClient
   , newOpenAIClient
   , newDataRobotClient
+
+    -- * Output parsing helpers
+  , parseJsonOutput
   ) where
 
 import Agent.Types
@@ -40,6 +52,7 @@ import Agent.OpenAI (OpenAIClient, newOpenAIClient, newDataRobotClient, sendOpen
 import Data.Aeson
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
+import Data.Proxy (Proxy(..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -89,6 +102,52 @@ agent model systemPrompt parser = Agent
 withTool :: Agent deps output -> Tool deps -> Agent deps output
 withTool ag tool = ag
   { agentTools = Map.insert (tdName $ toolDef tool) tool (agentTools ag)
+  }
+
+-- | Create a new agent with dependencies (for chaining)
+agentWithDeps
+  :: Text                              -- ^ Model name
+  -> Text                              -- ^ System prompt
+  -> (Value -> Either Text output)     -- ^ Output parser
+  -> Agent deps output
+agentWithDeps model systemPrompt parser = Agent
+  { agentConfig = AgentConfig
+      { acModel = model
+      , acMaxTokens = 4096
+      , acSystemPrompt = systemPrompt
+      , acMaxRetries = 3
+      }
+  , agentTools = Map.empty
+  , agentParseOutput = parser
+  }
+
+--------------------------------------------------------------------------------
+-- Typed Agents (with automatic result tool)
+--------------------------------------------------------------------------------
+
+-- | Create a typed agent that uses a result tool to guarantee output type.
+-- The output type must have ToSchema and FromJSON instances.
+-- No system prompt needed - instructions come from the result tool schema.
+typedAgent
+  :: (ToSchema output, FromJSON output)
+  => Text                              -- ^ Model name
+  -> Agent () output
+typedAgent model = typedAgentWithDeps model
+
+-- | Create a typed agent with dependencies
+typedAgentWithDeps
+  :: forall deps output. (ToSchema output, FromJSON output)
+  => Text                              -- ^ Model name
+  -> Agent deps output
+typedAgentWithDeps model = Agent
+  { agentConfig = AgentConfig
+      { acModel = model
+      , acMaxTokens = 4096
+      , acSystemPrompt = "Use the final_result tool to return your answer."
+      , acMaxRetries = 3
+      }
+  , agentTools = Map.singleton resultToolName (resultTool (Proxy :: Proxy output))
+  , agentParseOutput = parseJsonOutput
   }
 
 -- | Run an agent with a user prompt (no dependencies)
@@ -199,40 +258,93 @@ runLoop deps client ag@Agent{..} state@AgentState{..} retryCount callback
         Right (ToolUseResponse toolCalls usage) -> do
           -- Emit tool call events
           mapM_ (\tc -> callback $ EventToolCall (tcName tc) (tcInput tc)) toolCalls
-          -- Execute all tool calls
-          results <- executeToolCalls agentTools deps toolCalls
-          -- Emit tool result events
-          mapM_ (\(tc, tr) -> callback $ EventToolResult (tcName tc) (trContent tr))
-                (zip toolCalls results)
-          let toolParts = map ToolUsePart toolCalls
-              resultParts = map ToolResultPart results
-              newState = state
-                { asMessages = asMessages ++
-                    [ Message Assistant toolParts
-                    , Message User resultParts
-                    ]
-                , asUsage = asUsage <> usage
-                }
-          -- Continue the loop
-          runLoop deps client ag newState 0 callback
+
+          -- Check for final_result tool call - if found, parse and return immediately
+          case filter (\tc -> tcName tc == resultToolName) toolCalls of
+            (resultCall:_) -> do
+              -- This is the final result - parse and return
+              callback $ EventToolResult resultToolName "final"
+              let newState = state
+                    { asMessages = asMessages ++
+                        [Message Assistant (map ToolUsePart toolCalls)]
+                    , asUsage = asUsage <> usage
+                    }
+              case agentParseOutput (tcInput resultCall) of
+                Right output -> pure $ Right (output, newState)
+                Left err -> pure $ Left $ ParseError err
+
+            [] -> do
+              -- No final_result, execute tools and continue
+              results <- executeToolCalls agentTools deps toolCalls
+              -- Emit tool result events
+              mapM_ (\(tc, tr) -> callback $ EventToolResult (tcName tc) (trContent tr))
+                    (zip toolCalls results)
+              let toolParts = map ToolUsePart toolCalls
+                  resultParts = map ToolResultPart results
+                  newState = state
+                    { asMessages = asMessages ++
+                        [ Message Assistant toolParts
+                        , Message User resultParts
+                        ]
+                    , asUsage = asUsage <> usage
+                    }
+              -- Continue the loop
+              runLoop deps client ag newState 0 callback
 
         Right (MixedResponse text toolCalls usage) -> do
           -- Emit thinking event
           callback $ EventThinking text
           -- Emit tool call events
           mapM_ (\tc -> callback $ EventToolCall (tcName tc) (tcInput tc)) toolCalls
-          -- Execute tool calls and continue
-          results <- executeToolCalls agentTools deps toolCalls
-          -- Emit tool result events
-          mapM_ (\(tc, tr) -> callback $ EventToolResult (tcName tc) (trContent tr))
-                (zip toolCalls results)
-          let assistantParts = TextPart text : map ToolUsePart toolCalls
-              resultParts = map ToolResultPart results
-              newState = state
-                { asMessages = asMessages ++
-                    [ Message Assistant assistantParts
-                    , Message User resultParts
-                    ]
-                , asUsage = asUsage <> usage
-                }
-          runLoop deps client ag newState 0 callback
+
+          -- Check for final_result tool call
+          case filter (\tc -> tcName tc == resultToolName) toolCalls of
+            (resultCall:_) -> do
+              -- This is the final result
+              callback $ EventToolResult resultToolName "final"
+              let newState = state
+                    { asMessages = asMessages ++
+                        [Message Assistant (TextPart text : map ToolUsePart toolCalls)]
+                    , asUsage = asUsage <> usage
+                    }
+              case agentParseOutput (tcInput resultCall) of
+                Right output -> pure $ Right (output, newState)
+                Left err -> pure $ Left $ ParseError err
+
+            [] -> do
+              -- Execute tool calls and continue
+              results <- executeToolCalls agentTools deps toolCalls
+              -- Emit tool result events
+              mapM_ (\(tc, tr) -> callback $ EventToolResult (tcName tc) (trContent tr))
+                    (zip toolCalls results)
+              let assistantParts = TextPart text : map ToolUsePart toolCalls
+                  resultParts = map ToolResultPart results
+                  newState = state
+                    { asMessages = asMessages ++
+                        [ Message Assistant assistantParts
+                        , Message User resultParts
+                        ]
+                    , asUsage = asUsage <> usage
+                    }
+              runLoop deps client ag newState 0 callback
+
+--------------------------------------------------------------------------------
+-- Output parsing helpers
+--------------------------------------------------------------------------------
+
+-- | Parse JSON from model output (handles string-wrapped JSON and markdown)
+parseJsonOutput :: FromJSON a => Value -> Either Text a
+parseJsonOutput v = case fromJSON v of
+  Success x -> Right x
+  Error _ -> case v of
+    String t ->
+      let cleaned = T.strip $ stripMarkdown t
+      in case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 cleaned) of
+        Right x -> Right x
+        Left err -> Left $ "JSON parse error: " <> T.pack err
+    _ -> Left "Expected JSON object or string"
+  where
+    stripMarkdown t
+      | "```json" `T.isPrefixOf` t = T.dropWhile (== '\n') $ T.drop 7 $ T.dropWhileEnd (/= '`') $ T.dropEnd 3 t
+      | "```" `T.isPrefixOf` t = T.dropWhile (== '\n') $ T.drop 3 $ T.dropWhileEnd (/= '`') $ T.dropEnd 3 t
+      | otherwise = t

@@ -5,7 +5,13 @@
 module Agent.Tools
   ( -- * Tool creation helpers
     makeTool,
+    makeSimpleTool,
+    liftTool,
     simpleSchema,
+
+    -- * Result tool (for typed outputs)
+    resultTool,
+    resultToolName,
 
     -- * Tool execution
     executeTool,
@@ -17,9 +23,12 @@ import Agent.Types
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Key (fromText)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
+import Data.Proxy (Proxy(..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 
 -- | Create a simple JSON schema for a tool
 simpleSchema :: [(Text, Text, Text)] -> Value
@@ -55,6 +64,49 @@ makeTool name desc schema execute =
     { toolDef = ToolDef name desc schema,
       toolExecute = execute
     }
+
+-- | Helper to create a simple tool that ignores dependencies
+makeSimpleTool ::
+  -- | Name
+  Text ->
+  -- | Description
+  Text ->
+  -- | Input schema
+  Value ->
+  -- | Execution function (no deps)
+  (Value -> IO (Either Text Value)) ->
+  Tool deps
+makeSimpleTool name desc schema execute =
+  Tool
+    { toolDef = ToolDef name desc schema,
+      toolExecute = \_ input -> execute input
+    }
+
+-- | Lift a Tool () to work with any deps type
+liftTool :: Tool () -> Tool deps
+liftTool tool = Tool
+  { toolDef = toolDef tool
+  , toolExecute = \_ input -> toolExecute tool () input
+  }
+
+-- | The name of the result tool
+resultToolName :: Text
+resultToolName = "final_result"
+
+-- | Create a result tool from a type's schema.
+-- When the model calls this tool, the agent returns the parsed output.
+-- The tool execution just echoes back the input as JSON for parsing.
+resultTool :: forall output deps. ToSchema output => Proxy output -> Tool deps
+resultTool proxy = Tool
+  { toolDef = ToolDef
+      { tdName = resultToolName
+      , tdDescription = "Return the final result. Call this when you have the answer."
+      , tdInputSchema = toSchema proxy
+      }
+  , toolExecute = \_ input ->
+      -- Just echo back the input as JSON string for the agent to parse
+      pure $ Right $ String $ TE.decodeUtf8 $ LBS.toStrict $ encode input
+  }
 
 -- | Execute a single tool
 executeTool ::
