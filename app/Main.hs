@@ -70,7 +70,7 @@ runPipeline client city = runExceptT $ do
         (weather, temps)
         client
         reportAgent
-        ("Generate a weather report for " <> wiCity weather)
+        ("Generate a weather report for " <> wiCity weather <> " using the following data: " <> T.pack (show temps) <> " and " <> T.pack (show weather))
   pure report
 
 --------------------------------------------------------------------------------
