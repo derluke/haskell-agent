@@ -21,11 +21,13 @@ module Agent
     -- * Running agents
     runAgent,
     runAgentWithDeps,
+    runAgentWithDepsVerbose,
     runAgentVerbose,
     runAgentWithCallback,
     runAgentWithDepsCallback,
     continueAgent,
     continueAgentVerbose,
+    continueAgentWithDepsVerbose,
     continueAgentWithCallback,
 
     -- * Events
@@ -194,6 +196,17 @@ runAgentWithDeps ::
 runAgentWithDeps deps client ag userPrompt =
   runAgentWithDepsCallback deps client ag userPrompt (\_ -> pure ())
 
+-- | Run an agent with dependencies and verbose output
+runAgentWithDepsVerbose ::
+  (LLMClient client) =>
+  deps ->
+  client ->
+  Agent deps output ->
+  Text ->
+  IO (Either AgentError (output, AgentState))
+runAgentWithDepsVerbose deps client ag prompt =
+  runAgentWithDepsCallback deps client ag prompt verboseEventPrinter
+
 -- | Run an agent with verbose output (prints tool calls and results)
 runAgentVerbose ::
   (LLMClient client) =>
@@ -201,23 +214,26 @@ runAgentVerbose ::
   Agent () output ->
   Text ->
   IO (Either AgentError (output, AgentState))
-runAgentVerbose client ag prompt = runAgentWithCallback client ag prompt printEvent
-  where
-    printEvent :: AgentEvent -> IO ()
-    printEvent (EventToolCall name input) = do
-      TIO.putStrLn $ "  \x1b[33m→ Tool call:\x1b[0m " <> name
-      let inputStr = TE.decodeUtf8 $ LBS.toStrict $ encode input
-      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 inputStr <> "\x1b[0m"
-    printEvent (EventToolResult name result) = do
-      TIO.putStrLn $ "  \x1b[32m← Result:\x1b[0m " <> name
-      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 result <> "\x1b[0m"
-    printEvent (EventThinking text) = do
-      TIO.putStrLn $ "  \x1b[36m💭 Thinking:\x1b[0m " <> truncateText 80 text
-    printEvent (EventModelResponse _) = pure () -- Don't print, caller handles final response
-    truncateText :: Int -> Text -> Text
-    truncateText n t
-      | T.length t > n = T.take n t <> "..."
-      | otherwise = t
+runAgentVerbose client ag prompt =
+  runAgentWithCallback client ag prompt verboseEventPrinter
+
+verboseEventPrinter :: AgentEvent -> IO ()
+verboseEventPrinter (EventToolCall name input) = do
+  TIO.putStrLn $ "  \x1b[33m→ Tool call:\x1b[0m " <> name
+  let inputStr = TE.decodeUtf8 $ LBS.toStrict $ encode input
+  TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 inputStr <> "\x1b[0m"
+verboseEventPrinter (EventToolResult name result) = do
+  TIO.putStrLn $ "  \x1b[32m← Result:\x1b[0m " <> name
+  TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 result <> "\x1b[0m"
+verboseEventPrinter (EventThinking text) = do
+  TIO.putStrLn $ "  \x1b[36m💭 Thinking:\x1b[0m " <> truncateText 80 text
+verboseEventPrinter (EventModelResponse _) =
+  pure () -- Don't print, caller handles final response
+
+truncateText :: Int -> Text -> Text
+truncateText n t
+  | T.length t > n = T.take n t <> "..."
+  | otherwise = t
 
 -- | Run an agent with a callback for events
 runAgentWithCallback ::
@@ -270,24 +286,23 @@ continueAgentVerbose ::
   Text ->
   IO (Either AgentError (output, AgentState))
 continueAgentVerbose client ag prevState newPrompt =
-  continueAgentWithCallback client ag prevState newPrompt printEvent
-  where
-    printEvent :: AgentEvent -> IO ()
-    printEvent (EventToolCall name input) = do
-      TIO.putStrLn $ "  \x1b[33m→ Tool call:\x1b[0m " <> name
-      let inputStr = TE.decodeUtf8 $ LBS.toStrict $ encode input
-      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 inputStr <> "\x1b[0m"
-    printEvent (EventToolResult name result) = do
-      TIO.putStrLn $ "  \x1b[32m← Result:\x1b[0m " <> name
-      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 result <> "\x1b[0m"
-    printEvent (EventThinking text) = do
-      TIO.putStrLn $ "  \x1b[36m💭 Thinking:\x1b[0m " <> truncateText 80 text
-    printEvent (EventModelResponse _) = pure ()
+  continueAgentWithCallback client ag prevState newPrompt verboseEventPrinter
 
-    truncateText :: Int -> Text -> Text
-    truncateText n t
-      | T.length t > n = T.take n t <> "..."
-      | otherwise = t
+-- | Continue a conversation with dependencies and verbose output
+continueAgentWithDepsVerbose ::
+  (LLMClient client) =>
+  deps ->
+  client ->
+  Agent deps output ->
+  AgentState ->
+  Text ->
+  IO (Either AgentError (output, AgentState))
+continueAgentWithDepsVerbose deps client ag prevState newPrompt = do
+  let newState =
+        prevState
+          { asMessages = asMessages prevState ++ [Message User [TextPart newPrompt]]
+          }
+  runLoop deps client ag newState 0 verboseEventPrinter
 
 -- | Continue a conversation with a callback for events
 continueAgentWithCallback ::

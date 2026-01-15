@@ -56,17 +56,17 @@ runPipeline client city = runExceptT $ do
   -- Step 2: WeatherInfo -> ConvertedTemperature
   (temps, _) <-
     ExceptT $
-      runAgentWithDeps
+      runAgentWithDepsVerbose
         weather
         client
         temperatureAgent
-        ("Convert " <> T.pack (show (wiTemperatureC weather)) <> "C")
+        ("Convert " <> T.pack (show (wiTemperatureC weather)) <> "C (use the calculator tool)")
   liftIO $ putStrLn $ "  => " ++ show temps
 
   -- Step 3: (WeatherInfo, ConvertedTemperature) -> WeatherReport
   (report, _) <-
     ExceptT $
-      runAgentWithDeps
+      runAgentWithDepsVerbose
         (weather, temps)
         client
         reportAgent
