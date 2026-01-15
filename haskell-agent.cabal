@@ -7,8 +7,8 @@ description:
   The library focuses on type-driven output parsing via JSON Schema and provides
   simple helpers for composing tools and chaining agent workflows.
 category:      AI, LLM, Agents
-homepage:      https://github.com/lukas/haskell-agent
-bug-reports:   https://github.com/lukas/haskell-agent/issues
+homepage:      https://github.com/derluke/haskell-agent
+bug-reports:   https://github.com/derluke/haskell-agent/issues
 license:       MIT
 license-file:  LICENSE
 author:        Lukas
@@ -24,7 +24,7 @@ extra-doc-files:
 
 source-repository head
   type: git
-  location: https://github.com/lukas/haskell-agent.git
+  location: https://github.com/derluke/haskell-agent.git
 
 library
   exposed-modules:
