@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE GADTs #-}
 
 -- | MCP (Model Context Protocol) client implementation
 --
@@ -28,63 +28,64 @@
 -- @
 module Agent.MCP
   ( -- * MCP Server (Stdio)
-    MCPServer
-  , MCPConfig (..)
-  , defaultMCPConfig
+    MCPServer,
+    MCPConfig (..),
+    defaultMCPConfig,
 
     -- * MCP Server (HTTP)
-  , HttpMCPServer
-  , HttpMCPConfig (..)
-  , defaultHttpMCPConfig
+    HttpMCPServer,
+    HttpMCPConfig (..),
+    defaultHttpMCPConfig,
 
     -- * Connection (Stdio)
-  , connectMCP
-  , connectMCPWithConfig
-  , disconnectMCP
+    connectMCP,
+    connectMCPWithConfig,
+    disconnectMCP,
 
     -- * Connection (HTTP)
-  , connectHttpMCP
-  , disconnectHttpMCP
+    connectHttpMCP,
+    disconnectHttpMCP,
 
     -- * Tools (Stdio)
-  , mcpTools
-  , mcpToolDefs
-  , withMCPServer
-  , withMCPTools
+    mcpTools,
+    mcpToolDefs,
+    withMCPServer,
+    withMCPTools,
 
     -- * Tools (HTTP)
-  , mcpHttpTools
-  , mcpHttpToolDefs
-  , withHttpMCPServer
+    mcpHttpTools,
+    mcpHttpToolDefs,
+    withHttpMCPServer,
 
     -- * Low-level API (Stdio)
-  , mcpListTools
-  , mcpCallTool
-  , mcpInitialize
+    mcpListTools,
+    mcpCallTool,
+    mcpInitialize,
 
     -- * Low-level API (HTTP)
-  , mcpHttpListTools
-  , mcpHttpCallTool
-  , mcpHttpInitialize
+    mcpHttpListTools,
+    mcpHttpCallTool,
+    mcpHttpInitialize,
 
     -- * Errors
-  , MCPError (..)
+    MCPError (..),
 
     -- * Header helpers
-  , mkHeader
+    mkHeader,
 
     -- * Tool info (for inspection)
-  , MCPToolInfo (..)
-  ) where
+    MCPToolInfo (..),
+  )
+where
 
 import Agent.Types
-
-import Control.Concurrent (MVar, newMVar, modifyMVar, modifyMVar_)
-import Control.Exception (SomeException, try, throwIO, Exception)
+import Control.Concurrent (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Exception (Exception, SomeException, throwIO, try)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.CaseInsensitive (mk)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -92,30 +93,29 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import GHC.Generics (Generic)
 import Network.HTTP.Client
-  ( Manager
-  , RequestBody(..)
-  , httpLbs
-  , newManager
-  , parseRequest
-  , requestBody
-  , requestHeaders
-  , responseBody
-  , responseStatus
-  , method
+  ( Manager,
+    RequestBody (..),
+    httpLbs,
+    method,
+    newManager,
+    parseRequest,
+    requestBody,
+    requestHeaders,
+    responseBody,
+    responseStatus,
   )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Types.Header (Header, hAccept, hContentType)
 import Network.HTTP.Types.Status (statusCode)
-import Network.HTTP.Types.Header (Header, hContentType, hAccept)
-import Data.CaseInsensitive (mk)
-import System.IO (Handle, hFlush, hSetBuffering, BufferMode(..), hClose, hIsEOF)
+import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
 import System.Process
-  ( ProcessHandle
-  , CreateProcess(..)
-  , StdStream(..)
-  , proc
-  , createProcess
-  , terminateProcess
-  , waitForProcess
+  ( CreateProcess (..),
+    ProcessHandle,
+    StdStream (..),
+    createProcess,
+    proc,
+    terminateProcess,
+    waitForProcess,
   )
 
 --------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ import System.Process
 data MCPError
   = MCPConnectionError Text
   | MCPProtocolError Text
-  | MCPToolError Text Text  -- tool name, error message
+  | MCPToolError Text Text -- tool name, error message
   | MCPParseError Text
   | MCPTimeout
   deriving (Show, Eq, Generic)
@@ -135,28 +135,32 @@ instance Exception MCPError
 
 -- | MCP server configuration
 data MCPConfig = MCPConfig
-  { mcpTimeout :: Int          -- ^ Timeout in microseconds (default: 30s)
-  , mcpClientName :: Text      -- ^ Client name for initialization
-  , mcpClientVersion :: Text   -- ^ Client version for initialization
+  { -- | Timeout in microseconds (default: 30s)
+    mcpTimeout :: Int,
+    -- | Client name for initialization
+    mcpClientName :: Text,
+    -- | Client version for initialization
+    mcpClientVersion :: Text
   }
   deriving (Show, Eq)
 
 -- | Default MCP configuration
 defaultMCPConfig :: MCPConfig
-defaultMCPConfig = MCPConfig
-  { mcpTimeout = 30000000      -- 30 seconds
-  , mcpClientName = "haskell-agent"
-  , mcpClientVersion = "0.1.0"
-  }
+defaultMCPConfig =
+  MCPConfig
+    { mcpTimeout = 30000000, -- 30 seconds
+      mcpClientName = "haskell-agent",
+      mcpClientVersion = "0.1.0"
+    }
 
 -- | Handle to an MCP server subprocess (stdio transport)
 data MCPServer = MCPServer
-  { mcpStdin :: Handle
-  , mcpStdout :: Handle
-  , mcpProcess :: ProcessHandle
-  , mcpRequestId :: MVar Int
-  , mcpConfig :: MCPConfig
-  , mcpCachedTools :: MVar (Maybe [MCPToolInfo])  -- Cached tool list
+  { mcpStdin :: Handle,
+    mcpStdout :: Handle,
+    mcpProcess :: ProcessHandle,
+    mcpRequestId :: MVar Int,
+    mcpConfig :: MCPConfig,
+    mcpCachedTools :: MVar (Maybe [MCPToolInfo]) -- Cached tool list
   }
 
 --------------------------------------------------------------------------------
@@ -165,35 +169,40 @@ data MCPServer = MCPServer
 
 -- | Configuration for HTTP-based MCP servers
 data HttpMCPConfig = HttpMCPConfig
-  { httpMCPTimeout :: Int              -- ^ Timeout in microseconds (default: 30s)
-  , httpMCPClientName :: Text          -- ^ Client name for initialization
-  , httpMCPClientVersion :: Text       -- ^ Client version for initialization
-  , httpMCPHeaders :: [Header]         -- ^ Custom HTTP headers (case-insensitive names)
+  { -- | Timeout in microseconds (default: 30s)
+    httpMCPTimeout :: Int,
+    -- | Client name for initialization
+    httpMCPClientName :: Text,
+    -- | Client version for initialization
+    httpMCPClientVersion :: Text,
+    -- | Custom HTTP headers (case-insensitive names)
+    httpMCPHeaders :: [Header]
   }
 
 -- | Default HTTP MCP configuration
 defaultHttpMCPConfig :: HttpMCPConfig
-defaultHttpMCPConfig = HttpMCPConfig
-  { httpMCPTimeout = 30000000      -- 30 seconds
-  , httpMCPClientName = "haskell-agent"
-  , httpMCPClientVersion = "0.1.0"
-  , httpMCPHeaders = []
-  }
+defaultHttpMCPConfig =
+  HttpMCPConfig
+    { httpMCPTimeout = 30000000, -- 30 seconds
+      httpMCPClientName = "haskell-agent",
+      httpMCPClientVersion = "0.1.0",
+      httpMCPHeaders = []
+    }
 
 -- | Handle to an HTTP-based MCP server
 data HttpMCPServer = HttpMCPServer
-  { httpMCPUrl :: Text
-  , httpMCPManager :: Manager
-  , httpMCPRequestId :: MVar Int
-  , httpMCPConfig :: HttpMCPConfig
-  , httpMCPCachedTools :: MVar (Maybe [MCPToolInfo])
+  { httpMCPUrl :: Text,
+    httpMCPManager :: Manager,
+    httpMCPRequestId :: MVar Int,
+    httpMCPConfig :: HttpMCPConfig,
+    httpMCPCachedTools :: MVar (Maybe [MCPToolInfo])
   }
 
 -- | Tool information from MCP server
 data MCPToolInfo = MCPToolInfo
-  { mtiName :: Text
-  , mtiDescription :: Text
-  , mtiInputSchema :: Value
+  { mtiName :: Text,
+    mtiDescription :: Text,
+    mtiInputSchema :: Value
   }
   deriving (Show, Eq, Generic)
 
@@ -214,25 +223,26 @@ emptySchema = object ["type" .= ("object" :: Text), "properties" .= object []]
 
 -- | JSON-RPC request
 data JsonRpcRequest = JsonRpcRequest
-  { jrpcId :: Int
-  , jrpcMethod :: Text
-  , jrpcParams :: Maybe Value
+  { jrpcId :: Int,
+    jrpcMethod :: Text,
+    jrpcParams :: Maybe Value
   }
   deriving (Show, Generic)
 
 instance ToJSON JsonRpcRequest where
-  toJSON JsonRpcRequest{..} = object
-    [ "jsonrpc" .= ("2.0" :: Text)
-    , "id" .= jrpcId
-    , "method" .= jrpcMethod
-    , "params" .= jrpcParams
-    ]
+  toJSON JsonRpcRequest {..} =
+    object
+      [ "jsonrpc" .= ("2.0" :: Text),
+        "id" .= jrpcId,
+        "method" .= jrpcMethod,
+        "params" .= jrpcParams
+      ]
 
 -- | JSON-RPC response
 data JsonRpcResponse = JsonRpcResponse
-  { jrpcRespId :: Maybe Int
-  , jrpcResult :: Maybe Value
-  , jrpcError :: Maybe JsonRpcError
+  { jrpcRespId :: Maybe Int,
+    jrpcResult :: Maybe Value,
+    jrpcError :: Maybe JsonRpcError
   }
   deriving (Show, Generic)
 
@@ -245,9 +255,9 @@ instance FromJSON JsonRpcResponse where
 
 -- | JSON-RPC error
 data JsonRpcError = JsonRpcError
-  { jrpcErrCode :: Int
-  , jrpcErrMessage :: Text
-  , jrpcErrData :: Maybe Value
+  { jrpcErrCode :: Int,
+    jrpcErrMessage :: Text,
+    jrpcErrData :: Maybe Value
   }
   deriving (Show, Generic)
 
@@ -264,17 +274,18 @@ instance FromJSON JsonRpcError where
 
 -- | Connect to an MCP server by spawning a subprocess
 connectMCP :: FilePath -> [String] -> IO (Either MCPError MCPServer)
-connectMCP cmd args = connectMCPWithConfig defaultMCPConfig cmd args
+connectMCP = connectMCPWithConfig defaultMCPConfig
 
 -- | Connect to an MCP server with custom configuration
 connectMCPWithConfig :: MCPConfig -> FilePath -> [String] -> IO (Either MCPError MCPServer)
 connectMCPWithConfig config cmd args = do
   result <- try $ do
-    let cp = (proc cmd args)
-          { std_in = CreatePipe
-          , std_out = CreatePipe
-          , std_err = CreatePipe  -- Capture stderr to prevent noise
-          }
+    let cp =
+          (proc cmd args)
+            { std_in = CreatePipe,
+              std_out = CreatePipe,
+              std_err = CreatePipe -- Capture stderr to prevent noise
+            }
     (Just stdin, Just stdout, Just _stderr, ph) <- createProcess cp
 
     -- Set up buffering
@@ -284,14 +295,15 @@ connectMCPWithConfig config cmd args = do
     -- Create server handle
     reqId <- newMVar 1
     toolCache <- newMVar Nothing
-    let server = MCPServer
-          { mcpStdin = stdin
-          , mcpStdout = stdout
-          , mcpProcess = ph
-          , mcpRequestId = reqId
-          , mcpConfig = config
-          , mcpCachedTools = toolCache
-          }
+    let server =
+          MCPServer
+            { mcpStdin = stdin,
+              mcpStdout = stdout,
+              mcpProcess = ph,
+              mcpRequestId = reqId,
+              mcpConfig = config,
+              mcpCachedTools = toolCache
+            }
 
     -- Initialize the connection
     initResult <- mcpInitialize server
@@ -307,7 +319,7 @@ connectMCPWithConfig config cmd args = do
 
 -- | Disconnect from an MCP server
 disconnectMCP :: MCPServer -> IO ()
-disconnectMCP MCPServer{..} = do
+disconnectMCP MCPServer {..} = do
   hClose mcpStdin
   hClose mcpStdout
   terminateProcess mcpProcess
@@ -325,13 +337,14 @@ connectHttpMCP config url = do
     manager <- newManager tlsManagerSettings
     reqId <- newMVar 1
     toolCache <- newMVar Nothing
-    let server = HttpMCPServer
-          { httpMCPUrl = url
-          , httpMCPManager = manager
-          , httpMCPRequestId = reqId
-          , httpMCPConfig = config
-          , httpMCPCachedTools = toolCache
-          }
+    let server =
+          HttpMCPServer
+            { httpMCPUrl = url,
+              httpMCPManager = manager,
+              httpMCPRequestId = reqId,
+              httpMCPConfig = config,
+              httpMCPCachedTools = toolCache
+            }
 
     -- Initialize the connection
     initResult <- mcpHttpInitialize server
@@ -354,14 +367,16 @@ disconnectHttpMCP _ = pure ()
 -- | Initialize the MCP connection
 mcpInitialize :: MCPServer -> IO (Either MCPError Value)
 mcpInitialize server = do
-  let params = object
-        [ "protocolVersion" .= ("2024-11-05" :: Text)
-        , "capabilities" .= object []
-        , "clientInfo" .= object
-            [ "name" .= mcpClientName (mcpConfig server)
-            , "version" .= mcpClientVersion (mcpConfig server)
-            ]
-        ]
+  let params =
+        object
+          [ "protocolVersion" .= ("2024-11-05" :: Text),
+            "capabilities" .= object [],
+            "clientInfo"
+              .= object
+                [ "name" .= mcpClientName (mcpConfig server),
+                  "version" .= mcpClientVersion (mcpConfig server)
+                ]
+          ]
   sendRequest server "initialize" (Just params)
 
 -- | List available tools from the MCP server
@@ -391,10 +406,11 @@ mcpListTools server = do
 -- | Call a tool on the MCP server
 mcpCallTool :: MCPServer -> Text -> Value -> IO (Either MCPError Value)
 mcpCallTool server toolName input = do
-  let params = object
-        [ "name" .= toolName
-        , "arguments" .= input
-        ]
+  let params =
+        object
+          [ "name" .= toolName,
+            "arguments" .= input
+          ]
   result <- sendRequest server "tools/call" (Just params)
   case result of
     Left err -> pure $ Left err
@@ -406,7 +422,7 @@ extractContent val = case val of
   Object o -> case KM.lookup "content" o of
     Just (Array arr) -> case V.toList arr of
       -- Get text from first content block
-      (Object c:_) -> case KM.lookup "text" c of
+      (Object c : _) -> case KM.lookup "text" c of
         Just t -> t
         Nothing -> val
       _ -> val
@@ -421,14 +437,16 @@ extractContent val = case val of
 -- | Initialize the HTTP MCP connection
 mcpHttpInitialize :: HttpMCPServer -> IO (Either MCPError Value)
 mcpHttpInitialize server = do
-  let params = object
-        [ "protocolVersion" .= ("2024-11-05" :: Text)
-        , "capabilities" .= object []
-        , "clientInfo" .= object
-            [ "name" .= httpMCPClientName (httpMCPConfig server)
-            , "version" .= httpMCPClientVersion (httpMCPConfig server)
-            ]
-        ]
+  let params =
+        object
+          [ "protocolVersion" .= ("2024-11-05" :: Text),
+            "capabilities" .= object [],
+            "clientInfo"
+              .= object
+                [ "name" .= httpMCPClientName (httpMCPConfig server),
+                  "version" .= httpMCPClientVersion (httpMCPConfig server)
+                ]
+          ]
   sendHttpRequest server "initialize" (Just params)
 
 -- | List available tools from the HTTP MCP server
@@ -458,10 +476,11 @@ mcpHttpListTools server = do
 -- | Call a tool on the HTTP MCP server
 mcpHttpCallTool :: HttpMCPServer -> Text -> Value -> IO (Either MCPError Value)
 mcpHttpCallTool server toolName input = do
-  let params = object
-        [ "name" .= toolName
-        , "arguments" .= input
-        ]
+  let params =
+        object
+          [ "name" .= toolName,
+            "arguments" .= input
+          ]
   result <- sendHttpRequest server "tools/call" (Just params)
   case result of
     Left err -> pure $ Left err
@@ -473,7 +492,7 @@ mcpHttpCallTool server toolName input = do
 
 -- | Send a JSON-RPC request and wait for response
 sendRequest :: MCPServer -> Text -> Maybe Value -> IO (Either MCPError Value)
-sendRequest MCPServer{..} method params = do
+sendRequest MCPServer {..} method params = do
   -- Get next request ID
   reqId <- modifyMVar mcpRequestId $ \i -> pure (i + 1, i)
 
@@ -519,7 +538,7 @@ readResponse h = do
           Right resp ->
             -- Check if it's a notification (no id)
             case jrpcRespId resp of
-              Nothing -> readResponse h  -- Skip notifications
+              Nothing -> readResponse h -- Skip notifications
               Just _ -> pure $ Right resp
 
 --------------------------------------------------------------------------------
@@ -528,7 +547,7 @@ readResponse h = do
 
 -- | Send a JSON-RPC request over HTTP
 sendHttpRequest :: HttpMCPServer -> Text -> Maybe Value -> IO (Either MCPError Value)
-sendHttpRequest HttpMCPServer{..} method params = do
+sendHttpRequest HttpMCPServer {..} method params = do
   -- Get next request ID
   reqId <- modifyMVar httpMCPRequestId $ \i -> pure (i + 1, i)
 
@@ -537,14 +556,16 @@ sendHttpRequest HttpMCPServer{..} method params = do
 
   result <- try $ do
     initReq <- parseRequest (T.unpack httpMCPUrl)
-    let req = initReq
-          { method = "POST"
-          , requestBody = RequestBodyLBS body
-          , requestHeaders =
-              [ (hContentType, "application/json")
-              , (hAccept, "application/json, text/event-stream")
-              ] ++ httpMCPHeaders httpMCPConfig
-          }
+    let req =
+          initReq
+            { method = "POST",
+              requestBody = RequestBodyLBS body,
+              requestHeaders =
+                [ (hContentType, "application/json"),
+                  (hAccept, "application/json, text/event-stream")
+                ]
+                  ++ httpMCPHeaders httpMCPConfig
+            }
     response <- httpLbs req httpMCPManager
     let status = statusCode $ responseStatus response
         respBody = responseBody response
@@ -559,9 +580,14 @@ sendHttpRequest HttpMCPServer{..} method params = do
             Nothing -> case jrpcResult resp of
               Just val -> pure $ Right val
               Nothing -> pure $ Left $ MCPProtocolError "No result in response"
-      else pure $ Left $ MCPProtocolError $
-        "HTTP error " <> T.pack (show status) <> ": " <>
-        TE.decodeUtf8 (LBS.toStrict $ responseBody response)
+      else
+        pure $
+          Left $
+            MCPProtocolError $
+              "HTTP error "
+                <> T.pack (show status)
+                <> ": "
+                <> TE.decodeUtf8 (LBS.toStrict $ responseBody response)
 
   case result of
     Left (e :: SomeException) -> pure $ Left $ MCPProtocolError $ T.pack $ show e
@@ -579,11 +605,12 @@ mcpToolDefs server = do
     Left err -> pure $ Left err
     Right tools -> pure $ Right $ map toToolDef tools
   where
-    toToolDef MCPToolInfo{..} = ToolDef
-      { tdName = mtiName
-      , tdDescription = mtiDescription
-      , tdInputSchema = mtiInputSchema
-      }
+    toToolDef MCPToolInfo {..} =
+      ToolDef
+        { tdName = mtiName,
+          tdDescription = mtiDescription,
+          tdInputSchema = mtiInputSchema
+        }
 
 -- | Get Tools from an MCP server that can be added to an agent
 mcpTools :: MCPServer -> IO (Either MCPError [Tool ()])
@@ -594,18 +621,20 @@ mcpTools server = do
     Right tools -> pure $ Right $ map (toTool server) tools
   where
     toTool :: MCPServer -> MCPToolInfo -> Tool ()
-    toTool srv MCPToolInfo{..} = Tool
-      { toolDef = ToolDef
-          { tdName = mtiName
-          , tdDescription = mtiDescription
-          , tdInputSchema = mtiInputSchema
-          }
-      , toolExecute = \_ input -> do
-          result <- mcpCallTool srv mtiName input
-          case result of
-            Left err -> pure $ Left $ T.pack $ show err
-            Right val -> pure $ Right val
-      }
+    toTool srv MCPToolInfo {..} =
+      Tool
+        { toolDef =
+            ToolDef
+              { tdName = mtiName,
+                tdDescription = mtiDescription,
+                tdInputSchema = mtiInputSchema
+              },
+          toolExecute = \_ input -> do
+            result <- mcpCallTool srv mtiName input
+            case result of
+              Left err -> pure $ Left $ T.pack $ show err
+              Right val -> pure $ Right val
+        }
 
 -- | Use an MCP server within a bracket, ensuring cleanup
 withMCPServer :: FilePath -> [String] -> (MCPServer -> IO a) -> IO (Either MCPError a)
@@ -626,15 +655,17 @@ withMCPTools :: Agent deps output -> [Tool ()] -> Agent deps output
 withMCPTools ag tools = foldr (flip addMCPTool) ag (map liftMCPTool tools)
   where
     liftMCPTool :: Tool () -> Tool deps
-    liftMCPTool tool = Tool
-      { toolDef = toolDef tool
-      , toolExecute = \_ input -> toolExecute tool () input
-      }
+    liftMCPTool tool =
+      Tool
+        { toolDef = toolDef tool,
+          toolExecute = \_ input -> toolExecute tool () input
+        }
 
     addMCPTool :: Agent deps output -> Tool deps -> Agent deps output
-    addMCPTool agent tool = agent
-      { agentTools = Map.insert (tdName $ toolDef tool) tool (agentTools agent)
-      }
+    addMCPTool agent tool =
+      agent
+        { agentTools = Map.insert (tdName $ toolDef tool) tool (agentTools agent)
+        }
 
 --------------------------------------------------------------------------------
 -- Tool Integration (HTTP)
@@ -648,11 +679,12 @@ mcpHttpToolDefs server = do
     Left err -> pure $ Left err
     Right tools -> pure $ Right $ map toToolDef tools
   where
-    toToolDef MCPToolInfo{..} = ToolDef
-      { tdName = mtiName
-      , tdDescription = mtiDescription
-      , tdInputSchema = mtiInputSchema
-      }
+    toToolDef MCPToolInfo {..} =
+      ToolDef
+        { tdName = mtiName,
+          tdDescription = mtiDescription,
+          tdInputSchema = mtiInputSchema
+        }
 
 -- | Get Tools from an HTTP MCP server that can be added to an agent
 mcpHttpTools :: HttpMCPServer -> IO (Either MCPError [Tool ()])
@@ -663,18 +695,20 @@ mcpHttpTools server = do
     Right tools -> pure $ Right $ map (toTool server) tools
   where
     toTool :: HttpMCPServer -> MCPToolInfo -> Tool ()
-    toTool srv MCPToolInfo{..} = Tool
-      { toolDef = ToolDef
-          { tdName = mtiName
-          , tdDescription = mtiDescription
-          , tdInputSchema = mtiInputSchema
-          }
-      , toolExecute = \_ input -> do
-          result <- mcpHttpCallTool srv mtiName input
-          case result of
-            Left err -> pure $ Left $ T.pack $ show err
-            Right val -> pure $ Right val
-      }
+    toTool srv MCPToolInfo {..} =
+      Tool
+        { toolDef =
+            ToolDef
+              { tdName = mtiName,
+                tdDescription = mtiDescription,
+                tdInputSchema = mtiInputSchema
+              },
+          toolExecute = \_ input -> do
+            result <- mcpHttpCallTool srv mtiName input
+            case result of
+              Left err -> pure $ Left $ T.pack $ show err
+              Right val -> pure $ Right val
+        }
 
 -- | Use an HTTP MCP server within a bracket, ensuring cleanup
 withHttpMCPServer :: HttpMCPConfig -> Text -> (HttpMCPServer -> IO a) -> IO (Either MCPError a)
@@ -710,13 +744,13 @@ extractSSEData input =
   let bs = LBS.toStrict input
       -- Find all "data:" lines and concatenate their content
       dataLines = extractDataLines (TE.decodeUtf8 bs)
-  in if T.null dataLines
-     then input  -- Not SSE format, return as-is
-     else LBS.fromStrict $ TE.encodeUtf8 dataLines
+   in if T.null dataLines
+        then input -- Not SSE format, return as-is
+        else LBS.fromStrict $ TE.encodeUtf8 dataLines
 
 -- | Extract content after "data:" prefixes from SSE text
 extractDataLines :: Text -> Text
 extractDataLines txt =
   let lines' = T.lines $ T.replace "\r\n" "\n" $ T.replace "\r" "\n" txt
       dataContents = [T.drop 5 line | line <- lines', "data:" `T.isPrefixOf` line]
-  in T.concat dataContents
+   in T.concat dataContents

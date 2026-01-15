@@ -1,0 +1,41 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the project with Cabal
+    cmds:
+      - cabal build
+
+  test:
+    desc: Run the test suite (if present)
+    cmds:
+      - cabal test
+
+  haddock:
+    desc: Build Haddock documentation
+    cmds:
+      - cabal haddock
+
+  install-tools:
+    desc: Install lint/format tools via cabal
+    cmds:
+      - cabal install hlint ormolu cabal-fmt --ghc-options=-O0 -j
+
+  lint:
+    desc: Run hlint over src and app
+    cmds:
+      - hlint src app
+
+  format:
+    desc: Format Haskell sources with Ormolu
+    cmds:
+      - ormolu -m inplace $(find src app -name '*.hs')
+
+  cabalfmt:
+    desc: Format the cabal file
+    cmds:
+      - cabal-fmt -i haskell-agent.cabal
+
+  fmt:
+    desc: Run all formatters
+    deps: [format, cabalfmt]

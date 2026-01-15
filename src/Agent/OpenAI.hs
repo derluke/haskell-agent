@@ -1,16 +1,16 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Agent.OpenAI
-  ( OpenAIClient(..)
-  , newOpenAIClient
-  , newDataRobotClient
-  , sendOpenAIRequest
-  ) where
+  ( OpenAIClient (..),
+    newOpenAIClient,
+    newDataRobotClient,
+    sendOpenAIRequest,
+  )
+where
 
 import Agent.Types
-
 import Data.Aeson
 import Data.Aeson.KeyMap (toList)
 import qualified Data.ByteString.Lazy as LBS
@@ -24,20 +24,21 @@ import System.Environment (lookupEnv)
 
 -- | OpenAI-compatible API client
 data OpenAIClient = OpenAIClient
-  { oaiApiKey :: Text
-  , oaiBaseUrl :: Text
-  , oaiManager :: Manager
+  { oaiApiKey :: Text,
+    oaiBaseUrl :: Text,
+    oaiManager :: Manager
   }
 
 -- | Create a new OpenAI client
 newOpenAIClient :: Text -> Text -> IO OpenAIClient
 newOpenAIClient apiKey baseUrl = do
   manager <- newManager tlsManagerSettings
-  pure OpenAIClient
-    { oaiApiKey = apiKey
-    , oaiBaseUrl = baseUrl
-    , oaiManager = manager
-    }
+  pure
+    OpenAIClient
+      { oaiApiKey = apiKey,
+        oaiBaseUrl = baseUrl,
+        oaiManager = manager
+      }
 
 -- | Create a client from DATAROBOT_API_TOKEN and DATAROBOT_ENDPOINT env vars
 newDataRobotClient :: IO (Either Text OpenAIClient)
@@ -60,13 +61,14 @@ newDataRobotClient = do
 messagesToJson :: Text -> [Message] -> [Value]
 messagesToJson systemPrompt msgs = systemMsg : concatMap messageToJson msgs
   where
-    systemMsg = object
-      [ "role" .= ("system" :: Text)
-      , "content" .= systemPrompt
-      ]
+    systemMsg =
+      object
+        [ "role" .= ("system" :: Text),
+          "content" .= systemPrompt
+        ]
 
     messageToJson :: Message -> [Value]
-    messageToJson Message{..} = case msgRole of
+    messageToJson Message {..} = case msgRole of
       User -> userMessages msgContent
       Assistant -> assistantMessages msgContent
       System -> [object ["role" .= ("system" :: Text), "content" .= contentText msgContent]]
@@ -75,10 +77,12 @@ messagesToJson systemPrompt msgs = systemMsg : concatMap messageToJson msgs
     userMessages :: [MessagePart] -> [Value]
     userMessages parts
       | all isToolResult parts = map toolResultToMsg parts
-      | otherwise = [object
-          [ "role" .= ("user" :: Text)
-          , "content" .= contentText parts
-          ]]
+      | otherwise =
+          [ object
+              [ "role" .= ("user" :: Text),
+                "content" .= contentText parts
+              ]
+          ]
 
     -- Assistant messages: either plain text or tool calls
     assistantMessages :: [MessagePart] -> [Value]
@@ -86,37 +90,44 @@ messagesToJson systemPrompt msgs = systemMsg : concatMap messageToJson msgs
       let texts = [t | TextPart t <- parts]
           toolCalls = [tc | ToolUsePart tc <- parts]
           textContent = if null texts then Null else String (T.concat texts)
-      in if null toolCalls
-         then [object
-           [ "role" .= ("assistant" :: Text)
-           , "content" .= textContent
-           ]]
-         else [object $
-           [ "role" .= ("assistant" :: Text)
-           , "tool_calls" .= map toolCallToJson toolCalls
-           ] ++ if null texts then [] else ["content" .= T.concat texts]]
+       in if null toolCalls
+            then
+              [ object
+                  [ "role" .= ("assistant" :: Text),
+                    "content" .= textContent
+                  ]
+              ]
+            else
+              [ object $
+                  [ "role" .= ("assistant" :: Text),
+                    "tool_calls" .= map toolCallToJson toolCalls
+                  ]
+                    ++ if null texts then [] else ["content" .= T.concat texts]
+              ]
 
     toolCallToJson :: ToolCall -> Value
-    toolCallToJson ToolCall{..} = object
-      [ "id" .= tcId
-      , "type" .= ("function" :: Text)
-      , "function" .= object
-          [ "name" .= tcName
-          , "arguments" .= encodeToText tcInput
-          ]
-      ]
+    toolCallToJson ToolCall {..} =
+      object
+        [ "id" .= tcId,
+          "type" .= ("function" :: Text),
+          "function"
+            .= object
+              [ "name" .= tcName,
+                "arguments" .= encodeToText tcInput
+              ]
+        ]
 
     encodeToText :: Value -> Text
     encodeToText v = TE.decodeUtf8 $ LBS.toStrict $ encode v
 
     toolResultToMsg :: MessagePart -> Value
-    toolResultToMsg (ToolResultPart ToolResult{..}) = object
-      [ "role" .= ("tool" :: Text)
-      , "tool_call_id" .= trToolUseId
-      , "content" .= trContent
-      ]
-    toolResultToMsg _ = Null  -- shouldn't happen
-
+    toolResultToMsg (ToolResultPart ToolResult {..}) =
+      object
+        [ "role" .= ("tool" :: Text),
+          "tool_call_id" .= trToolUseId,
+          "content" .= trContent
+        ]
+    toolResultToMsg _ = Null -- shouldn't happen
     isToolResult :: MessagePart -> Bool
     isToolResult (ToolResultPart _) = True
     isToolResult _ = False
@@ -128,39 +139,44 @@ messagesToJson systemPrompt msgs = systemMsg : concatMap messageToJson msgs
 toolsToJson :: [ToolDef] -> [Value]
 toolsToJson = map toOpenAITool
   where
-    toOpenAITool ToolDef{..} = object
-      [ "type" .= ("function" :: Text)
-      , "function" .= object
-          [ "name" .= tdName
-          , "description" .= tdDescription
-          , "parameters" .= tdInputSchema
-          ]
-      ]
+    toOpenAITool ToolDef {..} =
+      object
+        [ "type" .= ("function" :: Text),
+          "function"
+            .= object
+              [ "name" .= tdName,
+                "description" .= tdDescription,
+                "parameters" .= tdInputSchema
+              ]
+        ]
 
 -- | Send a request to an OpenAI-compatible API
-sendOpenAIRequest
-  :: OpenAIClient
-  -> AgentConfig
-  -> [Message]
-  -> [ToolDef]
-  -> IO (Either AgentError ModelResponse)
-sendOpenAIRequest OpenAIClient{..} AgentConfig{..} messages tools = do
-  let body = object $
-        [ "model" .= acModel
-        , "max_tokens" .= acMaxTokens
-        , "messages" .= messagesToJson acSystemPrompt messages
-        ] ++ if null tools then [] else [ "tools" .= toolsToJson tools ]
+sendOpenAIRequest ::
+  OpenAIClient ->
+  AgentConfig ->
+  [Message] ->
+  [ToolDef] ->
+  IO (Either AgentError ModelResponse)
+sendOpenAIRequest OpenAIClient {..} AgentConfig {..} messages tools = do
+  let body =
+        object $
+          [ "model" .= acModel,
+            "max_tokens" .= acMaxTokens,
+            "messages" .= messagesToJson acSystemPrompt messages
+          ]
+            ++ if null tools then [] else ["tools" .= toolsToJson tools]
 
   let url = T.unpack oaiBaseUrl <> "chat/completions"
   initialRequest <- parseRequest url
-  let request = initialRequest
-        { method = "POST"
-        , requestHeaders =
-            [ ("Content-Type", "application/json")
-            , ("Authorization", "Bearer " <> TE.encodeUtf8 oaiApiKey)
-            ]
-        , requestBody = RequestBodyLBS (encode body)
-        }
+  let request =
+        initialRequest
+          { method = "POST",
+            requestHeaders =
+              [ ("Content-Type", "application/json"),
+                ("Authorization", "Bearer " <> TE.encodeUtf8 oaiApiKey)
+              ],
+            requestBody = RequestBodyLBS (encode body)
+          }
 
   response <- httpLbs request oaiManager
   let status = statusCode (responseStatus response)
@@ -168,9 +184,14 @@ sendOpenAIRequest OpenAIClient{..} AgentConfig{..} messages tools = do
 
   if status >= 200 && status < 300
     then parseResponse respBody
-    else pure $ Left $ ApiError $
-      "API error " <> T.pack (show status) <> ": " <>
-      TE.decodeUtf8 (LBS.toStrict respBody)
+    else
+      pure $
+        Left $
+          ApiError $
+            "API error "
+              <> T.pack (show status)
+              <> ": "
+              <> TE.decodeUtf8 (LBS.toStrict respBody)
 
 -- | Parse the API response
 parseResponse :: LBS.ByteString -> IO (Either AgentError ModelResponse)
@@ -200,9 +221,7 @@ parseModelResponse = \case
         Just (Object msgObj) -> parseMessage msgObj usage
         _ -> Left $ ParseError "missing message in choice"
       _ -> Left $ ParseError "invalid choice format"
-
   _ -> Left $ ParseError "expected object response"
-
   where
     kvList o = map (\(k, v) -> (k, v)) $ toList o
 
@@ -244,9 +263,9 @@ parseModelResponse = \case
           tcInput <- case lookup "arguments" (kvList fnObj) of
             Just (String args) -> case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 args) of
               Right v -> Right v
-              Left _ -> Right $ String args  -- Keep as string if not valid JSON
+              Left _ -> Right $ String args -- Keep as string if not valid JSON
             Just v -> Right v
             _ -> Left $ ParseError "missing function arguments"
-          Right ToolCall{..}
+          Right ToolCall {..}
         _ -> Left $ ParseError "missing function in tool call"
     parseToolCall _ = Left $ ParseError "invalid tool call format"

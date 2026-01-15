@@ -1,14 +1,14 @@
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Agent.Types
   ( -- * Messages
@@ -43,7 +43,7 @@ import Data.Aeson.Key (fromText)
 import Data.Char (toLower)
 import Data.Kind (Type)
 import qualified Data.Map.Strict as Map
-import Data.Proxy (Proxy(..))
+import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
@@ -221,11 +221,11 @@ instance (Datatype d, GToSchemaFields f) => GToSchema (D1 d f) where
   gToSchema _ =
     let fields = gToSchemaFields (Proxy :: Proxy f)
         fieldNames = map fst fields
-    in object
-         [ "type" .= ("object" :: Text)
-         , "properties" .= object [(fromText k, v) | (k, v) <- fields]
-         , "required" .= fieldNames
-         ]
+     in object
+          [ "type" .= ("object" :: Text),
+            "properties" .= object [(fromText k, v) | (k, v) <- fields],
+            "required" .= fieldNames
+          ]
   gTypeName _ = T.pack $ datatypeName (undefined :: D1 d f ())
 
 -- | Fields within a constructor
@@ -233,7 +233,7 @@ class GToSchemaFields (f :: Type -> Type) where
   gToSchemaFields :: proxy f -> [(Text, Value)]
 
 -- | Constructor metadata (C1) - unwrap and get fields
-instance GToSchemaFields f => GToSchemaFields (C1 c f) where
+instance (GToSchemaFields f) => GToSchemaFields (C1 c f) where
   gToSchemaFields _ = gToSchemaFields (Proxy :: Proxy f)
 
 -- | Product of fields (record with multiple fields)
@@ -246,17 +246,17 @@ instance (Selector s, GToSchemaType a) => GToSchemaFields (S1 s a) where
     let name = T.pack $ selName (undefined :: S1 s a ())
         -- Strip common prefixes like "wi", "ct", "wr" from field names
         cleanName = stripFieldPrefix name
-    in [(cleanName, gToSchemaType (Proxy :: Proxy a))]
+     in [(cleanName, gToSchemaType (Proxy :: Proxy a))]
 
 -- | Strip common record field prefixes and convert to snake_case
 -- e.g., wiTemperatureC -> temperature_c, ctCelsius -> celsius
 stripFieldPrefix :: Text -> Text
 stripFieldPrefix name
-  | T.length name > 2 && T.all (`elem` ['a'..'z']) (T.take 2 name) =
+  | T.length name > 2 && T.all (`elem` ['a' .. 'z']) (T.take 2 name) =
       let rest = T.drop 2 name
-      in if not (T.null rest) && T.head rest `elem` ['A'..'Z']
-         then toSnakeCase $ T.cons (toLower $ T.head rest) (T.tail rest)
-         else name
+       in if not (T.null rest) && T.head rest `elem` ['A' .. 'Z']
+            then toSnakeCase $ T.cons (toLower $ T.head rest) (T.tail rest)
+            else name
   | otherwise = name
 
 -- | Convert camelCase to snake_case
@@ -265,8 +265,8 @@ toSnakeCase :: Text -> Text
 toSnakeCase = T.pack . go . T.unpack
   where
     go [] = []
-    go (c:cs)
-      | c `elem` ['A'..'Z'] = '_' : toLower c : go cs
+    go (c : cs)
+      | c `elem` ['A' .. 'Z'] = '_' : toLower c : go cs
       | otherwise = c : go cs
 
 -- | Type-level schema for field types
@@ -274,7 +274,7 @@ class GToSchemaType (f :: Type -> Type) where
   gToSchemaType :: proxy f -> Value
 
 -- | Unwrap Rec0 (the actual field type)
-instance ToSchemaType a => GToSchemaType (K1 i a) where
+instance (ToSchemaType a) => GToSchemaType (K1 i a) where
   gToSchemaType _ = toSchemaType (Proxy :: Proxy a)
 
 -- | Schema for primitive/nested types
@@ -303,5 +303,5 @@ instance ToSchemaType Bool where
   toSchemaType _ = object ["type" .= ("boolean" :: Text)]
 
 -- | Nested objects use their ToSchema instance
-instance {-# OVERLAPPABLE #-} ToSchema a => ToSchemaType a where
+instance {-# OVERLAPPABLE #-} (ToSchema a) => ToSchemaType a where
   toSchemaType _ = toSchema (Proxy :: Proxy a)

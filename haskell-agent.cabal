@@ -1,81 +1,90 @@
-cabal-version: 2.4
-name:          haskell-agent
-version:       0.1.0.0
-synopsis:      A minimal AI agent framework inspired by pydantic-ai
+cabal-version:      2.4
+name:               haskell-agent
+version:            0.1.0.0
+synopsis:           A minimal AI agent framework inspired by pydantic-ai
 description:
   Typed agent framework with tool-calling, model-agnostic clients, and MCP support.
   The library focuses on type-driven output parsing via JSON Schema and provides
   simple helpers for composing tools and chaining agent workflows.
-category:      AI, LLM, Agents
-homepage:      https://github.com/derluke/haskell-agent
-bug-reports:   https://github.com/derluke/haskell-agent/issues
-license:       MIT
-license-file:  LICENSE
-author:        Lukas
-maintainer:    Lukas <lukas@users.noreply.github.com>
-build-type:    Simple
+
+category:           AI, LLM, Agents
+homepage:           https://github.com/derluke/haskell-agent
+bug-reports:        https://github.com/derluke/haskell-agent/issues
+license:            MIT
+license-file:       LICENSE
+author:             Lukas
+maintainer:         Lukas <lukas@users.noreply.github.com>
+build-type:         Simple
 extra-source-files:
-  README.md
   CHANGELOG.md
   docs/*.md
-extra-doc-files:
   README.md
+
+extra-doc-files:
   CHANGELOG.md
+  README.md
 
 source-repository head
-  type: git
+  type:     git
   location: https://github.com/derluke/haskell-agent.git
 
 library
   exposed-modules:
     Agent
-    Agent.Types
     Agent.Anthropic
+    Agent.MCP
     Agent.OpenAI
     Agent.Tools
-    Agent.MCP
+    Agent.Types
+
   build-depends:
-    base >= 4.14 && < 5,
-    aeson >= 2.2.3.0,
-    text >= 1.2,
-    bytestring >= 0.10,
-    http-client >= 0.7,
-    http-client-tls >= 0.3,
-    http-types >= 0.12,
-    containers >= 0.6,
-    mtl >= 2.2,
-    transformers >= 0.5,
-    time >= 1.9,
-    process >= 1.6,
-    async >= 2.2,
-    vector >= 0.12,
-    case-insensitive >= 1.2
-  hs-source-dirs: src
+    , aeson             >=2.2.3.0
+    , async             >=2.2
+    , base              >=4.14    && <5
+    , bytestring        >=0.10
+    , case-insensitive  >=1.2
+    , containers        >=0.6
+    , http-client       >=0.7
+    , http-client-tls   >=0.3
+    , http-types        >=0.12
+    , mtl               >=2.2
+    , process           >=1.6
+    , text              >=1.2
+    , time              >=1.9
+    , transformers      >=0.5
+    , vector            >=0.12
+
+  hs-source-dirs:   src
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options:      -Wall
 
 executable agent-example
-  main-is: Main.hs
-  other-modules: Tools, Types
+  main-is:          Main.hs
+  other-modules:
+    Tools
+    Types
+
   build-depends:
-    base >= 4.14 && < 5,
-    haskell-agent,
-    text,
-    aeson >= 2.2.3.0,
-    bytestring,
-    transformers
-  hs-source-dirs: app
+    , aeson          >=2.2.3.0
+    , base           >=4.14    && <5
+    , bytestring
+    , haskell-agent
+    , text
+    , transformers
+
+  hs-source-dirs:   app
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options:      -Wall
 
 executable mcp-example
-  main-is: MCPExample.hs
+  main-is:          MCPExample.hs
   build-depends:
-    base >= 4.14 && < 5,
-    haskell-agent,
-    text,
-    aeson >= 2.2.3.0,
-    transformers
-  hs-source-dirs: app
+    , aeson          >=2.2.3.0
+    , base           >=4.14    && <5
+    , haskell-agent
+    , text
+    , transformers
+
+  hs-source-dirs:   app
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options:      -Wall

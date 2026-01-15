@@ -25,8 +25,8 @@ import System.Environment (lookupEnv)
 --------------------------------------------------------------------------------
 
 data EnvConfig = EnvConfig
-  { envMcpUrl :: Text
-  , envApiToken :: Text
+  { envMcpUrl :: Text,
+    envApiToken :: Text
   }
 
 loadEnvConfig :: IO (Either String EnvConfig)
@@ -35,10 +35,12 @@ loadEnvConfig = do
   maybeToken <- lookupEnv "MCP_API_TOKEN"
   case (maybeUrl, maybeToken) of
     (Just url, Just token) ->
-      pure $ Right EnvConfig
-        { envMcpUrl = T.pack url
-        , envApiToken = T.pack token
-        }
+      pure $
+        Right
+          EnvConfig
+            { envMcpUrl = T.pack url,
+              envApiToken = T.pack token
+            }
     (Nothing, _) -> pure $ Left "MCP_URL not set"
     (_, Nothing) -> pure $ Left "MCP_API_TOKEN not set"
 
@@ -55,14 +57,14 @@ main = do
     Left err -> do
       putStrLn $ "Missing configuration: " ++ err
       putStrLn "Set MCP_URL and MCP_API_TOKEN, then re-run the example."
-    Right EnvConfig{..} -> do
+    Right EnvConfig {..} -> do
       putStrLn $ "Connecting to: " ++ T.unpack envMcpUrl
       putStrLn ""
       let wrenConfig =
             defaultHttpMCPConfig
               { httpMCPHeaders =
-                  [ mkHeader "Authorization" ("Bearer " <> TE.encodeUtf8 envApiToken)
-                  , mkHeader "x-datarobot-token" ("Bearer " <> TE.encodeUtf8 envApiToken)
+                  [ mkHeader "Authorization" ("Bearer " <> TE.encodeUtf8 envApiToken),
+                    mkHeader "x-datarobot-token" ("Bearer " <> TE.encodeUtf8 envApiToken)
                   ]
               }
       connectHttpMCP wrenConfig envMcpUrl >>= \case
@@ -110,10 +112,11 @@ main = do
         go mState = do
           userInput <- promptInput
           unless (shouldQuit userInput) $ do
-            result <- maybe
-              (runAgentVerbose client mcpAgent userInput)
-              (\state -> continueAgentVerbose client mcpAgent state userInput)
-              mState
+            result <-
+              maybe
+                (runAgentVerbose client mcpAgent userInput)
+                (\state -> continueAgentVerbose client mcpAgent state userInput)
+                mState
             case result of
               Left err -> putStrLn $ "Agent error: " ++ show err
               Right (response, newState) -> do
@@ -139,11 +142,13 @@ main = do
       TIO.putStrLn $ "    " <> if T.null desc then "(no description)" else desc
 
     withError label action =
-      ExceptT $ action >>= \case
-        Left err -> pure $ Left (label <> ": " <> show err)
-        Right value -> pure $ Right value
+      ExceptT $
+        action >>= \case
+          Left err -> pure $ Left (label <> ": " <> show err)
+          Right value -> pure $ Right value
 
     withTextError label action =
-      ExceptT $ action >>= \case
-        Left err -> pure $ Left (label <> ": " <> T.unpack err)
-        Right value -> pure $ Right value
+      ExceptT $
+        action >>= \case
+          Left err -> pure $ Left (label <> ": " <> T.unpack err)
+          Right value -> pure $ Right value
