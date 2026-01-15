@@ -22,14 +22,6 @@ import qualified Data.Text.IO as TIO
 import Tools (calculatorTool, weatherTool)
 import Types
 
---------------------------------------------------------------------------------
--- Typed Agents
---
--- The magic: just declare the return type. The ToSchema instance generates
--- the JSON schema, and the agent automatically uses a 'final_result' tool
--- to guarantee type-safe output.
---------------------------------------------------------------------------------
-
 -- | Step 1: Get weather data
 -- The type signature alone tells the agent what to return!
 weatherAgent :: Agent () WeatherInfo
@@ -53,21 +45,32 @@ reportAgent = typedAgentWithDeps model
 -- Pipeline
 --------------------------------------------------------------------------------
 
--- | Run the typed pipeline using ExceptT for elegant chaining
+-- | Run the pipeline
 runPipeline :: (LLMClient c) => c -> Text -> IO (Either AgentError WeatherReport)
 runPipeline client city = runExceptT $ do
   -- Step 1: () -> WeatherInfo
-  (weather, _) <- ExceptT $ runAgentVerbose client weatherAgent ("Weather in " <> city <> "?")
+  (weather, _) <-
+    ExceptT $ runAgentVerbose client weatherAgent ("Weather in " <> city <> "?")
   liftIO $ putStrLn $ "  => " ++ show weather
 
   -- Step 2: WeatherInfo -> ConvertedTemperature
-  (temps, _) <- ExceptT $ runAgentWithDeps weather client temperatureAgent
-                  ("Convert " <> T.pack (show $ wiTemperatureC weather) <> "C")
+  (temps, _) <-
+    ExceptT $
+      runAgentWithDeps
+        weather
+        client
+        temperatureAgent
+        ("Convert " <> T.pack (show (wiTemperatureC weather)) <> "C")
   liftIO $ putStrLn $ "  => " ++ show temps
 
   -- Step 3: (WeatherInfo, ConvertedTemperature) -> WeatherReport
-  (report, _) <- ExceptT $ runAgentWithDeps (weather, temps) client reportAgent
-                  ("Generate a weather report for " <> wiCity weather)
+  (report, _) <-
+    ExceptT $
+      runAgentWithDeps
+        (weather, temps)
+        client
+        reportAgent
+        ("Generate a weather report for " <> wiCity weather)
   pure report
 
 --------------------------------------------------------------------------------
@@ -87,20 +90,20 @@ main = do
 
   newDataRobotClient >>= \case
     Left err -> TIO.putStrLn $ "Error: " <> err
-    Right client -> do
-      result <- runPipeline client "Tokyo"
-      case result of
+    Right client ->
+      runPipeline client "Tokyo" >>= \case
         Left err -> putStrLn $ "Error: " ++ show err
         Right report -> do
+          let temp = wrTemperature report
           putStrLn "\n=== WeatherReport ==="
           TIO.putStrLn $ "City:        " <> wrCity report
           TIO.putStrLn $ "Condition:   " <> wrCondition report
           putStrLn $
             "Temperature: "
-              ++ show (ctCelsius $ wrTemperature report)
+              ++ show (ctCelsius temp)
               ++ "C / "
-              ++ show (ctFahrenheit $ wrTemperature report)
+              ++ show (ctFahrenheit temp)
               ++ "F / "
-              ++ show (ctKelvin $ wrTemperature report)
+              ++ show (ctKelvin temp)
               ++ "K"
           TIO.putStrLn $ "Feels like:  " <> wrFeelsLike report

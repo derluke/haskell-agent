@@ -11,9 +11,10 @@ library
     Agent.Anthropic
     Agent.OpenAI
     Agent.Tools
+    Agent.MCP
   build-depends:
     base >= 4.14 && < 5,
-    aeson >= 2.0,
+    aeson >= 2.2.3.0,
     text >= 1.2,
     bytestring >= 0.10,
     http-client >= 0.7,
@@ -22,7 +23,11 @@ library
     containers >= 0.6,
     mtl >= 2.2,
     transformers >= 0.5,
-    time >= 1.9
+    time >= 1.9,
+    process >= 1.6,
+    async >= 2.2,
+    vector >= 0.12,
+    case-insensitive >= 1.2
   hs-source-dirs: src
   default-language: Haskell2010
   ghc-options: -Wall
@@ -34,8 +39,20 @@ executable agent-example
     base >= 4.14 && < 5,
     haskell-agent,
     text,
-    aeson,
+    aeson >= 2.2.3.0,
     bytestring,
+    transformers
+  hs-source-dirs: app
+  default-language: Haskell2010
+  ghc-options: -Wall
+
+executable mcp-example
+  main-is: MCPExample.hs
+  build-depends:
+    base >= 4.14 && < 5,
+    haskell-agent,
+    text,
+    aeson >= 2.2.3.0,
     transformers
   hs-source-dirs: app
   default-language: Haskell2010

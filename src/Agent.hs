@@ -8,6 +8,7 @@ module Agent
   ( -- * Re-exports
     module Agent.Types
   , module Agent.Tools
+  , module Agent.MCP
 
     -- * Agent creation (manual output parsing)
   , agent
@@ -24,6 +25,9 @@ module Agent
   , runAgentVerbose
   , runAgentWithCallback
   , runAgentWithDepsCallback
+  , continueAgent
+  , continueAgentVerbose
+  , continueAgentWithCallback
 
     -- * Events
   , AgentEvent(..)
@@ -46,6 +50,7 @@ module Agent
 
 import Agent.Types
 import Agent.Tools
+import Agent.MCP
 import Agent.Anthropic (AnthropicClient, newClient, sendRequest)
 import Agent.OpenAI (OpenAIClient, newOpenAIClient, newDataRobotClient, sendOpenAIRequest)
 
@@ -221,6 +226,60 @@ runAgentWithDepsCallback deps client ag userPrompt callback = do
         , asUsage = mempty
         }
   runLoop deps client ag initialState 0 callback
+
+-- | Continue a conversation with existing state
+continueAgent
+  :: LLMClient client
+  => client
+  -> Agent () output
+  -> AgentState           -- ^ Previous conversation state
+  -> Text                 -- ^ New user message
+  -> IO (Either AgentError (output, AgentState))
+continueAgent client ag prevState newPrompt =
+  continueAgentWithCallback client ag prevState newPrompt (\_ -> pure ())
+
+-- | Continue a conversation with verbose output
+continueAgentVerbose
+  :: LLMClient client
+  => client
+  -> Agent () output
+  -> AgentState           -- ^ Previous conversation state
+  -> Text                 -- ^ New user message
+  -> IO (Either AgentError (output, AgentState))
+continueAgentVerbose client ag prevState newPrompt =
+  continueAgentWithCallback client ag prevState newPrompt printEvent
+  where
+    printEvent :: AgentEvent -> IO ()
+    printEvent (EventToolCall name input) = do
+      TIO.putStrLn $ "  \x1b[33m→ Tool call:\x1b[0m " <> name
+      let inputStr = TE.decodeUtf8 $ LBS.toStrict $ encode input
+      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 inputStr <> "\x1b[0m"
+    printEvent (EventToolResult name result) = do
+      TIO.putStrLn $ "  \x1b[32m← Result:\x1b[0m " <> name
+      TIO.putStrLn $ "    \x1b[90m" <> truncateText 100 result <> "\x1b[0m"
+    printEvent (EventThinking text) = do
+      TIO.putStrLn $ "  \x1b[36m💭 Thinking:\x1b[0m " <> truncateText 80 text
+    printEvent (EventModelResponse _) = pure ()
+
+    truncateText :: Int -> Text -> Text
+    truncateText n t
+      | T.length t > n = T.take n t <> "..."
+      | otherwise = t
+
+-- | Continue a conversation with a callback for events
+continueAgentWithCallback
+  :: LLMClient client
+  => client
+  -> Agent () output
+  -> AgentState           -- ^ Previous conversation state
+  -> Text                 -- ^ New user message
+  -> (AgentEvent -> IO ())
+  -> IO (Either AgentError (output, AgentState))
+continueAgentWithCallback client ag prevState newPrompt callback = do
+  let newState = prevState
+        { asMessages = asMessages prevState ++ [Message User [TextPart newPrompt]]
+        }
+  runLoop () client ag newState 0 callback
 
 -- | Main agent loop
 runLoop
